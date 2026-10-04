@@ -63,6 +63,16 @@
   .adj { display: grid; grid-template-columns: repeat(5, 1fr); gap: 6px; }
   .adj button { padding: 10px 0; font-size: 14px; }
   footer button { font-size: 13px; }
+  .cardBody { display: flex; gap: 12px; }
+  .cardBody > div { flex: 1; min-width: 0; }
+  .poster { width: 54px; height: 81px; border-radius: 6px; object-fit: cover; background: var(--line); flex: none; }
+  .bar { height: 6px; background: var(--line); border-radius: 3px; overflow: hidden; margin: 4px 0 2px; }
+  .bar > span { display: block; height: 100%; background: var(--accent); }
+  .results { display: grid; gap: 4px; max-height: 260px; overflow-y: auto; }
+  .results button { display: flex; gap: 10px; align-items: center; text-align: left; padding: 6px; }
+  .results img, .results .noimg { width: 34px; height: 51px; border-radius: 4px; object-fit: cover; background: var(--line); flex: none; }
+  .hint { font-size: 13px; color: var(--muted); }
+  .ok { color: var(--accent); font-size: 13px; }
 </style>
 </head>
 <body>
@@ -82,6 +92,7 @@
     <button id="export" class="small">Exportar backup</button>
     <button id="importBtn" class="small">Importar backup</button>
     <input id="importFile" type="file" accept="application/json" class="hidden">
+    <button id="settingsBtn" class="small">Definições</button>
   </footer>
 </main>
 
@@ -92,6 +103,8 @@
     <strong id="dlgTitle">Novo</strong>
     <label>Título <input name="title" required autocomplete="off" list="titles"></label>
     <datalist id="titles"></datalist>
+    <div id="results" class="results"></div>
+    <div id="tmdbInfo" class="hint"></div>
     <div class="grid2">
       <label>Tipo
         <select name="type"><option value="film">Filme</option><option value="series">Série</option></select>
@@ -145,6 +158,24 @@
   </form>
 </dialog>
 
+<dialog id="setDlg">
+  <form method="dialog">
+    <strong>Definições</strong>
+    <label>Chave do TMDB
+      <input id="tmdbKey" autocomplete="off" autocapitalize="off" spellcheck="false" placeholder="Cola aqui a chave">
+    </label>
+    <div class="hint">Serve para pesquisar filmes e séries e saber a duração. Cria conta grátis em themoviedb.org,
+      depois Definições, API, e pede uma chave para uso pessoal. Serve a "API Key" ou o "API Read Access Token".
+      Fica guardada só neste aparelho.</div>
+    <div id="keyStatus" class="hint"></div>
+    <div class="row" style="justify-content:flex-end">
+      <button type="button" id="testKey">Testar</button>
+      <button value="cancel">Cancelar</button>
+      <button value="save" class="primary">Guardar</button>
+    </div>
+  </form>
+</dialog>
+
 <script>
 const KEY = 'film-time-v1';
 let items = load();
@@ -183,10 +214,16 @@ function render() {
   }
   el.innerHTML = list.map(i => `
     <div class="card" data-id="${i.id}">
+     <div class="cardBody">
+      ${i.tmdb?.poster ? `<img class="poster" src="${IMG}w154${esc(i.tmdb.poster)}" alt="" loading="lazy">` : ''}
+      <div>
       <div class="title">${esc(i.title)}</div>
       <div class="meta">${i.type === 'series' ? 'Série' : 'Filme'}${i.platform ? ' · ' + esc(i.platform) : ''} · ${when(i.updated)}</div>
       <div class="time">${i.type === 'series' ? `<span class="ep">T${i.season || 1}E${i.episode || 1}</span> ` : ''}${fmt(i.pos)}</div>
+      ${i.done ? '' : progress(i, i.pos)}
       ${i.note ? `<div class="meta">${esc(i.note)}</div>` : ''}
+      </div>
+     </div>
       <div class="actions">
         ${i.session ? `<span class="ep">A ver agora</span>` : i.done ? `<button class="small" data-act="reopen">Voltar a ver</button>` : `
           ${running() ? '' : `<button class="small primary" data-act="start">▶ Comecei</button>`}
@@ -209,8 +246,12 @@ function openForm(item) {
     f.h.value = Math.floor(item.pos / 3600) || ''; f.m.value = Math.floor(item.pos / 60) % 60 || '';
     f.s.value = item.pos % 60 || ''; f.note.value = item.note || '';
   }
+  formTmdb = item?.tmdb || null;
+  document.getElementById('results').innerHTML = '';
+  showTmdbInfo();
   toggleSeries();
-  document.getElementById('dlg').showModal();
+  const dlg = document.getElementById('dlg');
+  if (!dlg.open) dlg.showModal();
   (item ? f.m : f.title).focus();
 }
 function toggleSeries() {
@@ -242,6 +283,7 @@ document.getElementById('dlg').addEventListener('close', () => {
   let item = items.find(i => i.id === editingId);
   if (item) Object.assign(item, data);
   else items.push(item = { id: crypto.randomUUID ? crypto.randomUUID() : String(Date.now()), ...data });
+  if (formTmdb) item.tmdb = formTmdb; else delete item.tmdb;
   if (rv === 'start') startSession(item);
   save(); render();
 });
@@ -253,7 +295,7 @@ document.getElementById('list').addEventListener('click', e => {
   const act = btn.dataset.act;
   if (act === 'edit') return openForm(item);
   if (act === 'start') startSession(item);
-  if (act === 'next') { item.episode = (item.episode || 1) + 1; item.pos = 0; }
+  if (act === 'next') nextEpisode(item);
   if (act === 'done') item.done = true;
   if (act === 'reopen') item.done = false;
   if (act === 'del') {
@@ -324,6 +366,7 @@ function renderNow() {
     <div class="meta">${s.pausedAt ? 'Em pausa' : 'A ver'} · começaste às ${clock(s.startedAt)}</div>
     ${elapsed(s) > LONG ? `<div class="warn">Já passaram mais de 3 horas. Esqueceste-te de parar?</div>` : ''}
     <div class="time" id="nowTime">${fmt(livePos(i))}</div>
+    <div id="nowProg">${progress(i, livePos(i), true)}</div>
     <div class="row">
       <button data-now="pause">${s.pausedAt ? 'Retomar' : 'Pausa'}</button>
       <button data-now="stop" class="primary stop">Parei</button>
@@ -376,9 +419,158 @@ render = () => { _render(); renderNow(); };
 setInterval(() => {
   const i = running();
   const t = document.getElementById('nowTime');
-  if (i && t && !i.session.pausedAt) t.textContent = fmt(livePos(i));
+  if (i && t && !i.session.pausedAt) {
+    t.textContent = fmt(livePos(i));
+    document.getElementById('nowProg').innerHTML = progress(i, livePos(i), true);
+  }
 }, 1000);
 document.addEventListener('visibilitychange', () => { if (!document.hidden) { items = load(); render(); } });
+
+// TMDB: pesquisa de títulos e durações. A chave fica só neste aparelho.
+const TMDB_KEY = 'film-time-tmdb';
+const IMG = 'https://image.tmdb.org/t/p/';
+let formTmdb = null;
+const seasonLoads = new Set();
+
+const getKey = () => { try { return localStorage.getItem(TMDB_KEY) || ''; } catch { return ''; } };
+
+async function tmdb(path, params = {}, key = getKey()) {
+  if (!key) throw new Error('sem chave');
+  const u = new URL('https://api.themoviedb.org/3/' + path);
+  Object.entries({ language: 'pt-PT', ...params }).forEach(([k, v]) => u.searchParams.set(k, v));
+  const headers = {};
+  if (key.startsWith('eyJ')) headers.Authorization = 'Bearer ' + key;
+  else u.searchParams.set('api_key', key);
+  const r = await fetch(u, { headers });
+  if (!r.ok) throw new Error('TMDB ' + r.status);
+  return r.json();
+}
+
+const mins = m => m >= 60 ? `${Math.floor(m / 60)}h ${pad(m % 60)}min` : `${m} min`;
+
+// Duração em segundos do filme ou do episódio atual, ou null se não se souber
+function duration(i) {
+  const t = i.tmdb;
+  if (!t) return null;
+  const m = t.kind === 'movie' ? t.runtime : (t.eps?.[i.season || 1]?.[(i.episode || 1) - 1] || t.epRuntime);
+  return m ? m * 60 : null;
+}
+
+function progress(i, pos, live) {
+  const d = duration(i);
+  if (!d) return '';
+  const left = d - pos;
+  const pct = Math.min(100, Math.round(pos / d * 100));
+  let txt = left <= 0 ? 'Chegaste ao fim' : `Faltam ${mins(Math.ceil(left / 60))} de ${mins(Math.round(d / 60))}`;
+  if (left > 0) txt += ` · acabas às ${clock(Date.now() + left * 1000)}`;
+  return `<div class="bar"><span style="width:${pct}%"></span></div><div class="meta">${txt}</div>`;
+}
+
+async function ensureSeason(i) {
+  const t = i.tmdb, s = i.season || 1;
+  if (!t || t.kind !== 'tv' || t.eps?.[s] || seasonLoads.has(t.id + '/' + s) || !getKey()) return;
+  seasonLoads.add(t.id + '/' + s);
+  try {
+    const data = await tmdb(`tv/${t.id}/season/${s}`);
+    t.eps = { ...t.eps, [s]: data.episodes.map(e => e.runtime || 0) };
+    save(); render();
+  } catch { seasonLoads.delete(t.id + '/' + s); }
+}
+
+function nextEpisode(i) {
+  const count = i.tmdb?.seasons?.[i.season || 1];
+  if (count && (i.episode || 1) >= count && i.tmdb.seasons[(i.season || 1) + 1]) {
+    i.season = (i.season || 1) + 1; i.episode = 1;
+  } else i.episode = (i.episode || 1) + 1;
+  i.pos = 0;
+}
+
+function showTmdbInfo() {
+  const el = document.getElementById('tmdbInfo');
+  const t = formTmdb;
+  if (t) {
+    el.className = 'ok';
+    el.textContent = t.kind === 'movie'
+      ? `Encontrado no TMDB${t.runtime ? ' · duração ' + mins(t.runtime) : ''}`
+      : `Encontrado no TMDB · ${Object.keys(t.seasons || {}).length} temporadas${t.epRuntime ? ' · episódios de ~' + t.epRuntime + ' min' : ''}`;
+  } else {
+    el.className = 'hint';
+    el.textContent = getKey() ? '' : 'Para pesquisar e saber a duração, põe a chave do TMDB nas Definições.';
+  }
+}
+
+let searchTimer, searchSeq = 0;
+document.getElementById('form').title.addEventListener('input', e => {
+  if (formTmdb && e.target.value.trim() !== formTmdb.title) { formTmdb = null; showTmdbInfo(); }
+  clearTimeout(searchTimer);
+  const q = e.target.value.trim();
+  const box = document.getElementById('results');
+  if (q.length < 2 || !getKey() || formTmdb) { box.innerHTML = ''; return; }
+  searchTimer = setTimeout(async () => {
+    const seq = ++searchSeq;
+    try {
+      const data = await tmdb('search/multi', { query: q, include_adult: 'false' });
+      if (seq !== searchSeq) return;
+      const res = data.results.filter(r => r.media_type === 'movie' || r.media_type === 'tv').slice(0, 8);
+      box.innerHTML = res.length ? res.map(r => `
+        <button type="button" data-kind="${r.media_type}" data-tid="${r.id}">
+          ${r.poster_path ? `<img src="${IMG}w92${esc(r.poster_path)}" alt="">` : '<span class="noimg"></span>'}
+          <span><strong>${esc(r.title || r.name)}</strong><br>
+          <span class="hint">${r.media_type === 'movie' ? 'Filme' : 'Série'} · ${esc((r.release_date || r.first_air_date || '').slice(0, 4) || 's/ data')}</span></span>
+        </button>`).join('') : '<div class="hint">Sem resultados no TMDB. Podes guardar na mesma.</div>';
+    } catch (err) {
+      if (seq === searchSeq) box.innerHTML = `<div class="hint">Não foi possível pesquisar (${esc(err.message)}). Podes guardar na mesma.</div>`;
+    }
+  }, 350);
+});
+
+document.getElementById('results').addEventListener('click', async e => {
+  const b = e.target.closest('button[data-tid]');
+  if (!b) return;
+  const kind = b.dataset.kind, id = Number(b.dataset.tid);
+  const box = document.getElementById('results');
+  box.innerHTML = '<div class="hint">A carregar…</div>';
+  try {
+    const d = await tmdb(`${kind}/${id}`);
+    const t = { id, kind, title: d.title || d.name, poster: d.poster_path || null };
+    if (kind === 'movie') t.runtime = d.runtime || null;
+    else {
+      t.seasons = Object.fromEntries((d.seasons || []).filter(s => s.season_number > 0).map(s => [s.season_number, s.episode_count]));
+      t.epRuntime = d.episode_run_time?.[0] || d.last_episode_to_air?.runtime || null;
+    }
+    box.innerHTML = '';
+    const existing = !editingId && items.find(i => i.tmdb?.id === id && i.tmdb.kind === kind);
+    if (existing) { openForm(existing); return; }
+    formTmdb = t;
+    const f = document.getElementById('form');
+    f.title.value = t.title;
+    f.type.value = kind === 'movie' ? 'film' : 'series';
+    toggleSeries();
+    showTmdbInfo();
+  } catch (err) {
+    box.innerHTML = `<div class="hint">Erro ao carregar (${esc(err.message)}).</div>`;
+  }
+});
+
+document.getElementById('settingsBtn').addEventListener('click', () => {
+  document.getElementById('tmdbKey').value = getKey();
+  document.getElementById('keyStatus').textContent = '';
+  document.getElementById('setDlg').showModal();
+});
+document.getElementById('testKey').addEventListener('click', async () => {
+  const st = document.getElementById('keyStatus');
+  st.textContent = 'A testar…';
+  try { await tmdb('configuration', {}, document.getElementById('tmdbKey').value.trim()); st.textContent = 'A chave funciona.'; }
+  catch (err) { st.textContent = `Não funcionou (${err.message}). Confirma se copiaste a chave toda.`; }
+});
+document.getElementById('setDlg').addEventListener('close', () => {
+  if (document.getElementById('setDlg').returnValue !== 'save') return;
+  try { localStorage.setItem(TMDB_KEY, document.getElementById('tmdbKey').value.trim()); } catch {}
+  render();
+});
+
+const _render2 = render;
+render = () => { _render2(); items.filter(i => !i.done).forEach(ensureSeason); };
 
 render();
 </script>
