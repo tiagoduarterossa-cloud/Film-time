@@ -1,0 +1,265 @@
+<!doctype html>
+<html lang="pt">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<meta name="theme-color" content="#14161a">
+<title>Film Time</title>
+<link rel="manifest" href="manifest.webmanifest">
+<link rel="icon" href="icon.svg" type="image/svg+xml">
+<link rel="apple-touch-icon" href="icon.svg">
+<style>
+  :root {
+    --bg: #f6f5f2; --card: #ffffff; --text: #1c1d21; --muted: #6b6e76;
+    --line: #e3e1dc; --accent: #c98a12; --accent-ink: #ffffff; --danger: #b3261e;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root { --bg: #14161a; --card: #1e2127; --text: #ecebe8; --muted: #9a9ca3;
+      --line: #2e3138; --accent: #f5b942; --accent-ink: #14161a; --danger: #ff8a80; }
+  }
+  * { box-sizing: border-box; }
+  body { margin: 0; background: var(--bg); color: var(--text);
+    font: 16px/1.4 system-ui, -apple-system, "Segoe UI", Roboto, sans-serif; }
+  header { position: sticky; top: 0; z-index: 2; background: var(--bg);
+    padding: 16px 16px 8px; border-bottom: 1px solid var(--line); }
+  h1 { margin: 0 0 10px; font-size: 22px; }
+  .row { display: flex; gap: 8px; align-items: center; }
+  input, select, textarea { font: inherit; color: var(--text); background: var(--card);
+    border: 1px solid var(--line); border-radius: 10px; padding: 10px 12px; width: 100%; }
+  button { font: inherit; border: 1px solid var(--line); background: var(--card); color: var(--text);
+    border-radius: 10px; padding: 10px 14px; cursor: pointer; }
+  button.primary { background: var(--accent); color: var(--accent-ink); border-color: var(--accent); font-weight: 600; }
+  button.small { padding: 6px 10px; font-size: 14px; }
+  button.danger { color: var(--danger); }
+  .tabs { display: flex; gap: 6px; margin-top: 10px; }
+  .tabs button { flex: 1; padding: 8px; font-size: 14px; }
+  .tabs button.on { border-color: var(--accent); color: var(--accent); font-weight: 600; }
+  main { padding: 12px 16px 100px; max-width: 640px; margin: 0 auto; }
+  .card { background: var(--card); border: 1px solid var(--line); border-radius: 14px;
+    padding: 14px; margin-bottom: 10px; }
+  .title { font-weight: 600; font-size: 17px; }
+  .meta { color: var(--muted); font-size: 13px; margin-top: 2px; }
+  .time { font-variant-numeric: tabular-nums; font-size: 26px; font-weight: 700; margin: 8px 0; }
+  .ep { color: var(--accent); font-weight: 600; }
+  .actions { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 8px; }
+  .empty { text-align: center; color: var(--muted); padding: 40px 0; }
+  .fab { position: fixed; right: 16px; bottom: calc(16px + env(safe-area-inset-bottom));
+    border-radius: 999px; padding: 14px 20px; box-shadow: 0 4px 14px rgba(0,0,0,.25); }
+  dialog { border: none; border-radius: 16px; padding: 0; width: min(520px, calc(100vw - 32px));
+    background: var(--card); color: var(--text); }
+  dialog::backdrop { background: rgba(0,0,0,.5); }
+  form { padding: 18px; display: grid; gap: 10px; }
+  label { font-size: 13px; color: var(--muted); display: grid; gap: 4px; }
+  .grid3 { display: grid; grid-template-columns: repeat(3, 1fr); gap: 8px; }
+  .grid2 { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; }
+  .hidden { display: none !important; }
+  footer { text-align: center; padding: 10px; }
+  footer button { font-size: 13px; }
+</style>
+</head>
+<body>
+<header>
+  <h1>Film Time</h1>
+  <input id="search" type="search" placeholder="Procurar título ou plataforma">
+  <div class="tabs">
+    <button data-tab="active" class="on">A ver</button>
+    <button data-tab="done">Terminados</button>
+  </div>
+</header>
+
+<main>
+  <div id="list"></div>
+  <footer>
+    <button id="export" class="small">Exportar backup</button>
+    <button id="importBtn" class="small">Importar backup</button>
+    <input id="importFile" type="file" accept="application/json" class="hidden">
+  </footer>
+</main>
+
+<button id="add" class="primary fab">+ Adicionar</button>
+
+<dialog id="dlg">
+  <form id="form" method="dialog">
+    <strong id="dlgTitle">Novo</strong>
+    <label>Título <input name="title" required autocomplete="off" list="titles"></label>
+    <datalist id="titles"></datalist>
+    <div class="grid2">
+      <label>Tipo
+        <select name="type"><option value="film">Filme</option><option value="series">Série</option></select>
+      </label>
+      <label>Plataforma <input name="platform" list="platforms" autocomplete="off"></label>
+    </div>
+    <datalist id="platforms">
+      <option>Netflix</option><option>Disney+</option><option>Prime Video</option><option>Max</option>
+      <option>Apple TV+</option><option>RTP Play</option><option>SkyShowtime</option><option>Filmin</option>
+      <option>YouTube</option><option>MEO</option><option>NOS</option><option>Vodafone TV</option>
+    </datalist>
+    <div class="grid2 seriesOnly">
+      <label>Temporada <input name="season" type="number" min="1" inputmode="numeric"></label>
+      <label>Episódio <input name="episode" type="number" min="1" inputmode="numeric"></label>
+    </div>
+    <label>Paraste em (h, min, s)</label>
+    <div class="grid3">
+      <input name="h" type="number" min="0" inputmode="numeric" placeholder="h">
+      <input name="m" type="number" min="0" max="59" inputmode="numeric" placeholder="min">
+      <input name="s" type="number" min="0" max="59" inputmode="numeric" placeholder="s">
+    </div>
+    <label>Nota <textarea name="note" rows="2" placeholder="Ex: logo depois da cena do jantar"></textarea></label>
+    <div class="row" style="justify-content:flex-end">
+      <button value="cancel" formnovalidate>Cancelar</button>
+      <button id="save" value="save" class="primary">Guardar</button>
+    </div>
+  </form>
+</dialog>
+
+<script>
+const KEY = 'film-time-v1';
+let items = load();
+let tab = 'active';
+let editingId = null;
+
+function load() {
+  try { return JSON.parse(localStorage.getItem(KEY)) || []; } catch { return []; }
+}
+function save() {
+  try { localStorage.setItem(KEY, JSON.stringify(items)); }
+  catch { alert('Não foi possível guardar. O armazenamento do browser pode estar bloqueado.'); }
+}
+const pad = n => String(n).padStart(2, '0');
+const fmt = sec => `${Math.floor(sec / 3600)}:${pad(Math.floor(sec / 60) % 60)}:${pad(sec % 60)}`;
+const esc = s => String(s ?? '').replace(/[&<>"']/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
+const when = ts => {
+  const d = Math.round((Date.now() - ts) / 86400000);
+  return d === 0 ? 'hoje' : d === 1 ? 'ontem' : `há ${d} dias`;
+};
+
+function render() {
+  const q = document.getElementById('search').value.trim().toLowerCase();
+  const list = items
+    .filter(i => (tab === 'done') === !!i.done)
+    .filter(i => !q || i.title.toLowerCase().includes(q) || (i.platform || '').toLowerCase().includes(q))
+    .sort((a, b) => b.updated - a.updated);
+
+  document.getElementById('titles').innerHTML =
+    [...new Set(items.map(i => i.title))].map(t => `<option value="${esc(t)}">`).join('');
+
+  const el = document.getElementById('list');
+  if (!list.length) {
+    el.innerHTML = `<div class="empty">${tab === 'done' ? 'Nada terminado ainda.' : 'Nada em curso. Carrega em "+ Adicionar".'}</div>`;
+    return;
+  }
+  el.innerHTML = list.map(i => `
+    <div class="card" data-id="${i.id}">
+      <div class="title">${esc(i.title)}</div>
+      <div class="meta">${i.type === 'series' ? 'Série' : 'Filme'}${i.platform ? ' · ' + esc(i.platform) : ''} · ${when(i.updated)}</div>
+      <div class="time">${i.type === 'series' ? `<span class="ep">T${i.season || 1}E${i.episode || 1}</span> ` : ''}${fmt(i.pos)}</div>
+      ${i.note ? `<div class="meta">${esc(i.note)}</div>` : ''}
+      <div class="actions">
+        ${i.done ? `<button class="small" data-act="reopen">Voltar a ver</button>` : `
+          <button class="small primary" data-act="edit">Atualizar</button>
+          ${i.type === 'series' ? `<button class="small" data-act="next">Próximo ep.</button>` : ''}
+          <button class="small" data-act="done">Terminei</button>`}
+        <button class="small danger" data-act="del">Apagar</button>
+      </div>
+    </div>`).join('');
+}
+
+function openForm(item) {
+  editingId = item ? item.id : null;
+  const f = document.getElementById('form');
+  f.reset();
+  document.getElementById('dlgTitle').textContent = item ? 'Atualizar posição' : 'Novo';
+  if (item) {
+    f.title.value = item.title; f.type.value = item.type; f.platform.value = item.platform || '';
+    f.season.value = item.season || ''; f.episode.value = item.episode || '';
+    f.h.value = Math.floor(item.pos / 3600) || ''; f.m.value = Math.floor(item.pos / 60) % 60 || '';
+    f.s.value = item.pos % 60 || ''; f.note.value = item.note || '';
+  }
+  toggleSeries();
+  document.getElementById('dlg').showModal();
+  (item ? f.m : f.title).focus();
+}
+function toggleSeries() {
+  const f = document.getElementById('form');
+  document.querySelector('.seriesOnly').classList.toggle('hidden', f.type.value !== 'series');
+}
+
+document.getElementById('form').type.addEventListener('change', toggleSeries);
+
+// Ao escrever um título já existente, preenche o resto para poupar tempo
+document.getElementById('form').title.addEventListener('change', e => {
+  if (editingId) return;
+  const ex = items.find(i => i.title.toLowerCase() === e.target.value.trim().toLowerCase());
+  if (ex) { const t = e.target.value; openForm(ex); e.target.form.title.value = t; }
+});
+
+document.getElementById('dlg').addEventListener('close', () => {
+  if (document.getElementById('dlg').returnValue !== 'save') return;
+  const f = document.getElementById('form');
+  const n = name => Math.max(0, parseInt(f[name].value, 10) || 0);
+  const data = {
+    title: f.title.value.trim(), type: f.type.value, platform: f.platform.value.trim(),
+    season: n('season') || 1, episode: n('episode') || 1,
+    pos: n('h') * 3600 + Math.min(n('m'), 59) * 60 + Math.min(n('s'), 59),
+    note: f.note.value.trim(), updated: Date.now(), done: false
+  };
+  if (!data.title) return;
+  const existing = items.find(i => i.id === editingId);
+  if (existing) Object.assign(existing, data);
+  else items.push({ id: crypto.randomUUID ? crypto.randomUUID() : String(Date.now()), ...data });
+  save(); render();
+});
+
+document.getElementById('list').addEventListener('click', e => {
+  const btn = e.target.closest('button[data-act]');
+  if (!btn) return;
+  const item = items.find(i => i.id === btn.closest('.card').dataset.id);
+  const act = btn.dataset.act;
+  if (act === 'edit') return openForm(item);
+  if (act === 'next') { item.episode = (item.episode || 1) + 1; item.pos = 0; }
+  if (act === 'done') item.done = true;
+  if (act === 'reopen') item.done = false;
+  if (act === 'del') {
+    if (!confirm(`Apagar "${item.title}"?`)) return;
+    items = items.filter(i => i !== item);
+  } else item.updated = Date.now();
+  save(); render();
+});
+
+document.querySelectorAll('.tabs button').forEach(b => b.addEventListener('click', () => {
+  tab = b.dataset.tab;
+  document.querySelectorAll('.tabs button').forEach(x => x.classList.toggle('on', x === b));
+  render();
+}));
+document.getElementById('search').addEventListener('input', render);
+document.getElementById('add').addEventListener('click', () => openForm(null));
+
+document.getElementById('export').addEventListener('click', () => {
+  const blob = new Blob([JSON.stringify(items, null, 2)], { type: 'application/json' });
+  const a = document.createElement('a');
+  a.href = URL.createObjectURL(blob);
+  a.download = `film-time-${new Date().toISOString().slice(0, 10)}.json`;
+  a.click();
+  URL.revokeObjectURL(a.href);
+});
+document.getElementById('importBtn').addEventListener('click', () => document.getElementById('importFile').click());
+document.getElementById('importFile').addEventListener('change', async e => {
+  const file = e.target.files[0];
+  if (!file) return;
+  try {
+    const data = JSON.parse(await file.text());
+    if (!Array.isArray(data)) throw new Error();
+    const ids = new Set(items.map(i => i.id));
+    items = items.concat(data.filter(i => i && i.id && i.title && !ids.has(i.id)));
+    save(); render();
+  } catch { alert('Ficheiro inválido.'); }
+  e.target.value = '';
+});
+
+if ('serviceWorker' in navigator && location.protocol.startsWith('http')) {
+  navigator.serviceWorker.register('sw.js').catch(() => {});
+}
+render();
+</script>
+</body>
+</html>
