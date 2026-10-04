@@ -54,6 +54,14 @@
   .grid2 { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; }
   .hidden { display: none !important; }
   footer { text-align: center; padding: 10px; }
+  .now { margin-top: 10px; background: var(--card); border: 2px solid var(--accent);
+    border-radius: 14px; padding: 12px; }
+  .now .time { margin: 4px 0 10px; font-size: 32px; }
+  .now .stop { width: 100%; font-size: 20px; padding: 16px; }
+  .warn { color: var(--danger); font-size: 13px; margin-bottom: 8px; }
+  .big { font-variant-numeric: tabular-nums; font-size: 40px; font-weight: 700; text-align: center; }
+  .adj { display: grid; grid-template-columns: repeat(5, 1fr); gap: 6px; }
+  .adj button { padding: 10px 0; font-size: 14px; }
   footer button { font-size: 13px; }
 </style>
 </head>
@@ -65,6 +73,7 @@
     <button data-tab="active" class="on">A ver</button>
     <button data-tab="done">Terminados</button>
   </div>
+  <div id="now" class="now hidden"></div>
 </header>
 
 <main>
@@ -107,7 +116,31 @@
     <label>Nota <textarea name="note" rows="2" placeholder="Ex: logo depois da cena do jantar"></textarea></label>
     <div class="row" style="justify-content:flex-end">
       <button value="cancel" formnovalidate>Cancelar</button>
-      <button id="save" value="save" class="primary">Guardar</button>
+      <button id="save" value="save">Guardar</button>
+      <button id="saveStart" value="start" class="primary">Guardar e começar</button>
+    </div>
+  </form>
+</dialog>
+
+<dialog id="stopDlg">
+  <form method="dialog">
+    <strong id="stopTitle"></strong>
+    <div class="meta">Confirma onde paraste. Se fizeste pausas sem carregar em Pausa, corrige aqui.</div>
+    <div id="stopWarn" class="warn hidden"></div>
+    <div id="stopTime" class="big"></div>
+    <div class="adj">
+      <button type="button" data-adj="-300">−5 min</button>
+      <button type="button" data-adj="-60">−1 min</button>
+      <button type="button" data-adj="-10">−10 s</button>
+      <button type="button" data-adj="60">+1 min</button>
+      <button type="button" data-adj="300">+5 min</button>
+    </div>
+    <div class="row" style="justify-content:space-between">
+      <button value="discard" class="danger">Não vi nada</button>
+      <div class="row">
+        <button value="cancel">Continuo a ver</button>
+        <button value="stop" class="primary">Guardar</button>
+      </div>
     </div>
   </form>
 </dialog>
@@ -155,8 +188,9 @@ function render() {
       <div class="time">${i.type === 'series' ? `<span class="ep">T${i.season || 1}E${i.episode || 1}</span> ` : ''}${fmt(i.pos)}</div>
       ${i.note ? `<div class="meta">${esc(i.note)}</div>` : ''}
       <div class="actions">
-        ${i.done ? `<button class="small" data-act="reopen">Voltar a ver</button>` : `
-          <button class="small primary" data-act="edit">Atualizar</button>
+        ${i.session ? `<span class="ep">A ver agora</span>` : i.done ? `<button class="small" data-act="reopen">Voltar a ver</button>` : `
+          ${running() ? '' : `<button class="small primary" data-act="start">▶ Comecei</button>`}
+          <button class="small" data-act="edit">Atualizar</button>
           ${i.type === 'series' ? `<button class="small" data-act="next">Próximo ep.</button>` : ''}
           <button class="small" data-act="done">Terminei</button>`}
         <button class="small danger" data-act="del">Apagar</button>
@@ -194,7 +228,8 @@ document.getElementById('form').title.addEventListener('change', e => {
 });
 
 document.getElementById('dlg').addEventListener('close', () => {
-  if (document.getElementById('dlg').returnValue !== 'save') return;
+  const rv = document.getElementById('dlg').returnValue;
+  if (rv !== 'save' && rv !== 'start') return;
   const f = document.getElementById('form');
   const n = name => Math.max(0, parseInt(f[name].value, 10) || 0);
   const data = {
@@ -204,9 +239,10 @@ document.getElementById('dlg').addEventListener('close', () => {
     note: f.note.value.trim(), updated: Date.now(), done: false
   };
   if (!data.title) return;
-  const existing = items.find(i => i.id === editingId);
-  if (existing) Object.assign(existing, data);
-  else items.push({ id: crypto.randomUUID ? crypto.randomUUID() : String(Date.now()), ...data });
+  let item = items.find(i => i.id === editingId);
+  if (item) Object.assign(item, data);
+  else items.push(item = { id: crypto.randomUUID ? crypto.randomUUID() : String(Date.now()), ...data });
+  if (rv === 'start') startSession(item);
   save(); render();
 });
 
@@ -216,6 +252,7 @@ document.getElementById('list').addEventListener('click', e => {
   const item = items.find(i => i.id === btn.closest('.card').dataset.id);
   const act = btn.dataset.act;
   if (act === 'edit') return openForm(item);
+  if (act === 'start') startSession(item);
   if (act === 'next') { item.episode = (item.episode || 1) + 1; item.pos = 0; }
   if (act === 'done') item.done = true;
   if (act === 'reopen') item.done = false;
@@ -259,6 +296,90 @@ document.getElementById('importFile').addEventListener('change', async e => {
 if ('serviceWorker' in navigator && location.protocol.startsWith('http')) {
   navigator.serviceWorker.register('sw.js').catch(() => {});
 }
+
+// Temporizador: guarda a hora de início e calcula a posição a partir do relógio,
+// por isso continua certo mesmo com a app fechada ou o telemóvel bloqueado.
+const LONG = 3 * 3600;
+const running = () => items.find(i => i.session);
+const elapsed = s => Math.max(0, Math.floor(((s.pausedAt || Date.now()) - s.startedAt - s.pausedTotal) / 1000));
+const livePos = i => i.session.basePos + elapsed(i.session);
+const clock = ts => new Date(ts).toLocaleTimeString('pt-PT', { hour: '2-digit', minute: '2-digit' });
+const label = i => `${esc(i.title)}${i.type === 'series' ? ` <span class="ep">T${i.season || 1}E${i.episode || 1}</span>` : ''}`;
+
+function startSession(item) {
+  const cur = running();
+  if (cur && cur !== item) { alert(`Primeiro carrega em Parei em "${cur.title}".`); return; }
+  item.session = { startedAt: Date.now(), basePos: item.pos, pausedAt: null, pausedTotal: 0 };
+  item.done = false;
+}
+
+function renderNow() {
+  const el = document.getElementById('now');
+  const i = running();
+  el.classList.toggle('hidden', !i);
+  if (!i) { el.innerHTML = ''; return; }
+  const s = i.session;
+  el.innerHTML = `
+    <div class="title">${label(i)}</div>
+    <div class="meta">${s.pausedAt ? 'Em pausa' : 'A ver'} · começaste às ${clock(s.startedAt)}</div>
+    ${elapsed(s) > LONG ? `<div class="warn">Já passaram mais de 3 horas. Esqueceste-te de parar?</div>` : ''}
+    <div class="time" id="nowTime">${fmt(livePos(i))}</div>
+    <div class="row">
+      <button data-now="pause">${s.pausedAt ? 'Retomar' : 'Pausa'}</button>
+      <button data-now="stop" class="primary stop">Parei</button>
+    </div>`;
+}
+
+document.getElementById('now').addEventListener('click', e => {
+  const btn = e.target.closest('button[data-now]');
+  const i = running();
+  if (!btn || !i) return;
+  const s = i.session;
+  if (btn.dataset.now === 'pause') {
+    if (s.pausedAt) { s.pausedTotal += Date.now() - s.pausedAt; s.pausedAt = null; }
+    else s.pausedAt = Date.now();
+    save(); renderNow();
+  } else openStop(i);
+});
+
+let stopPos = 0;
+function openStop(i) {
+  stopPos = livePos(i);
+  document.getElementById('stopTitle').innerHTML = label(i);
+  const warn = document.getElementById('stopWarn');
+  const long = elapsed(i.session) > LONG;
+  warn.classList.toggle('hidden', !long);
+  warn.textContent = long ? `Começaste às ${clock(i.session.startedAt)}. Se te esqueceste de parar, este tempo está errado: corrige antes de guardar.` : '';
+  showStopTime();
+  document.getElementById('stopDlg').showModal();
+}
+const showStopTime = () => document.getElementById('stopTime').textContent = fmt(stopPos);
+
+document.querySelectorAll('[data-adj]').forEach(b => b.addEventListener('click', () => {
+  stopPos = Math.max(0, stopPos + Number(b.dataset.adj));
+  showStopTime();
+}));
+
+document.getElementById('stopDlg').addEventListener('close', () => {
+  const rv = document.getElementById('stopDlg').returnValue;
+  const i = running();
+  if (!i || (rv !== 'stop' && rv !== 'discard')) return;
+  if (rv === 'stop') i.pos = stopPos;
+  delete i.session;
+  i.updated = Date.now();
+  save(); render();
+});
+
+const _render = render;
+render = () => { _render(); renderNow(); };
+
+setInterval(() => {
+  const i = running();
+  const t = document.getElementById('nowTime');
+  if (i && t && !i.session.pausedAt) t.textContent = fmt(livePos(i));
+}, 1000);
+document.addEventListener('visibilitychange', () => { if (!document.hidden) { items = load(); render(); } });
+
 render();
 </script>
 </body>
